@@ -13,6 +13,7 @@ const state = {
   cloudEnabled: Boolean(cloudSyncEnabled && firebaseConfig?.projectId),
   cloudReady: false,
   user: null,
+  isAllowedEditor: false,
   message: "",
   firebase: null,
   unsubscribers: [],
@@ -82,7 +83,10 @@ function saveLocal() {
 }
 
 function canEdit() {
-  return !state.cloudEnabled || Boolean(state.user);
+  return (
+    !state.cloudEnabled ||
+    Boolean(state.user && state.isAllowedEditor)
+  );
 }
 
 function formatTime(value) {
@@ -622,6 +626,7 @@ async function initialiseFirebase() {
       onAuthStateChanged: authModule.onAuthStateChanged,
       collection: firestoreModule.collection,
       doc: firestoreModule.doc,
+      getDoc: firestoreModule.getDoc,
       getDocs: firestoreModule.getDocs,
       onSnapshot: firestoreModule.onSnapshot,
       serverTimestamp: firestoreModule.serverTimestamp,
@@ -629,12 +634,45 @@ async function initialiseFirebase() {
       writeBatch: firestoreModule.writeBatch,
     };
 
-    state.unsubscribers.push(
-      authModule.onAuthStateChanged(auth, (user) => {
-        state.user = user;
-        renderRoute();
-      }),
-    );
+state.unsubscribers.push(
+  authModule.onAuthStateChanged(auth, async (user) => {
+    state.user = user;
+    state.isAllowedEditor = false;
+
+    if (!user) {
+      renderRoute();
+      return;
+    }
+
+    try {
+      const email = user.email;
+
+      if (!email || !user.emailVerified) {
+        state.message = "此 Google 帳號未完成電郵驗證。";
+        await authModule.signOut(auth);
+        return;
+      }
+
+      const allowlistDocument = await firestoreModule.getDoc(
+        firestoreModule.doc(db, "editor_allowlist", email),
+      );
+
+      if (!allowlistDocument.exists()) {
+        state.message = "此 Google 帳號不在編輯白名單內。";
+        await authModule.signOut(auth);
+        return;
+      }
+
+      state.isAllowedEditor = true;
+      state.message = "";
+      renderRoute();
+    } catch (error) {
+      console.error(error);
+      state.message = "目前無法確認此帳號的編輯權限，請稍後再試。";
+      await authModule.signOut(auth);
+    }
+  }),
+);
 
     state.unsubscribers.push(
       firestoreModule.onSnapshot(
